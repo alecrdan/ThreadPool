@@ -5,6 +5,7 @@
 #include <thread>
 #include <vector>
 #include <stdexcept>
+#include <iostream>
 
 class ThreadPool
 {
@@ -19,12 +20,27 @@ public:
         using R = typename std::invoke_result<F, std::size_t>::type;
         std::vector<std::future<R>> futures;
         tasks_.clear();
+        release_index_ = 0;
         for (std::size_t i = 0; i < threads_; ++i)
         {
             auto ptask = std::make_shared<std::packaged_task<R()>>(std::bind(f, i));
             futures.push_back(ptask->get_future());
-            tasks_.push_back([ptask]
-                             { (*ptask)(); });
+            tasks_.push_back([ptask, i, this]
+                             {
+                {
+                    std::lock_guard<std::mutex> lk(mu_);
+                    std::cout << "[Thread " << i << "] is being used" << std::endl;
+                }
+                (*ptask)();
+                // Synchronize release order
+                for (;;) {
+                    std::lock_guard<std::mutex> lk(mu_);
+                    if (release_index_ == i) {
+                        std::cout << "[Thread " << i << "] is no longer in use" << std::endl;
+                        ++release_index_;
+                        break;
+                    }
+                } });
         }
         in_flight_ = threads_;
         workers_.clear();
@@ -56,4 +72,5 @@ private:
     std::mutex mu_;
     std::condition_variable cv_;
     std::size_t in_flight_ = 0;
+    std::size_t release_index_ = 0;
 };
